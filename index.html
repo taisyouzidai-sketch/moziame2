@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Word Rain</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #111;
+            color: #fff;
+            font-family: 'Arial Black', 'Impact', sans-serif;
+            overflow: hidden;
+            cursor: pointer;
+        }
+
+        #stage {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .word-block {
+            position: absolute;
+            font-weight: 900;
+            white-space: nowrap;
+            color: #fff;
+            z-index: 5;
+            transform-origin: center center;
+            line-height: 1;
+            will-change: transform;
+        }
+
+        .bg-letter {
+            position: absolute;
+            font-weight: 900;
+            color: rgba(255, 255, 255, 0.05);
+            white-space: nowrap;
+            pointer-events: none;
+            z-index: 1;
+            line-height: 1;
+        }
+
+        #interim-display {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 24px;
+            color: rgba(255, 255, 255, 0.3);
+            z-index: 10;
+            font-weight: bold;
+        }
+
+        #ambient-guide {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: rgba(255, 255, 255, 0.7);
+            font-family: 'Helvetica Neue', 'Arial', sans-serif;
+            font-size: 22px;
+            letter-spacing: 4px;
+            text-align: center;
+            z-index: 50;
+            pointer-events: none;
+            font-weight: 300;
+            transition: opacity 0.8s ease;
+            animation: pulse 2.5s infinite ease-in-out;
+        }
+
+        #ambient-guide span {
+            display: block;
+            font-size: 15px;
+            margin-top: 8px;
+            color: rgba(255, 255, 255, 0.5);
+        }
+
+        @keyframes pulse {
+            0% {
+                opacity: 0.2;
+            }
+
+            50% {
+                opacity: 0.6;
+            }
+
+            100% {
+                opacity: 0.2;
+            }
+        }
+    </style>
+</head>
+
+<body onclick="startVoice()">
+    <div id="stage"></div>
+    <div id="interim-display"></div>
+
+    <div id="ambient-guide">
+        Click anywhere to start
+        <span>画面のどこかをクリックして開始</span>
+    </div>
+
+    <script>
+        const stage = document.getElementById('stage');
+        const interimDisplay = document.getElementById('interim-display');
+        let blocks = [], bgLetters = [], letterQueue = [], isProcessing = false, isRecognizing = false;
+
+        const bgLettersPool = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?@#$".split('');
+
+        // --- Web Audio API による雨音常時生成システム ---
+        let audioCtx = null;
+        let rainGainNode = null;
+        let rainFilterNode = null;
+
+        function initRainAudio() {
+            if (audioCtx) return;
+
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+            const bufferSize = 2 * audioCtx.sampleRate;
+            const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+            const output = noiseBuffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) {
+                output[i] = Math.random() * 2 - 1;
+            }
+
+            const whiteNoise = audioCtx.createBufferSource();
+            whiteNoise.buffer = noiseBuffer;
+            whiteNoise.loop = true;
+
+            rainFilterNode = audioCtx.createBiquadFilter();
+            rainFilterNode.type = 'lowpass';
+            rainFilterNode.frequency.setValueAtTime(1600, audioCtx.currentTime);
+            rainFilterNode.Q.setValueAtTime(1.0, audioCtx.currentTime);
+
+            rainGainNode = audioCtx.createGain();
+            rainGainNode.gain.setValueAtTime(0.04, audioCtx.currentTime);
+
+            whiteNoise.connect(rainFilterNode);
+            rainFilterNode.connect(rainGainNode);
+            rainGainNode.connect(audioCtx.destination);
+
+            whiteNoise.start(0);
+        }
+
+        let currentIntensity = 0;
+        let targetIntensity = 0;
+
+        function updateRainAudioFrame() {
+            if (!audioCtx || !rainGainNode || !rainFilterNode) return;
+
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+
+            targetIntensity *= 0.98;
+            if (targetIntensity < 0.001) targetIntensity = 0;
+
+            currentIntensity += (targetIntensity - currentIntensity) * 0.06;
+
+            const gainValue = 0.04 + (0.10 * currentIntensity);
+            const filterValue = 1600 + (500 * currentIntensity);
+
+            rainGainNode.gain.setValueAtTime(gainValue, audioCtx.currentTime);
+            rainFilterNode.frequency.setValueAtTime(filterValue, audioCtx.currentTime);
+        }
+
+        function triggerRainSpike() {
+            targetIntensity = 1.0;
+        }
+        // ------------------------------------------
+
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const recognition = SpeechRecognition ? new SpeechRecognition() : null;
+
+        if (recognition) {
+            recognition.lang = 'ja-JP';
+            recognition.continuous = true;
+            recognition.interimResults = true;
+
+            recognition.onstart = () => { recognition.lang = 'ja-JP'; };
+            recognition.onsoundstart = () => { recognition.lang = 'ja-JP'; };
+            recognition.onend = () => { if (isRecognizing) { recognition.lang = 'ja-JP'; recognition.start(); } };
+
+            recognition.onresult = (event) => {
+                recognition.lang = 'ja-JP';
+                let interimTranscript = '';
+                let finalTranscript = '';
+
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    const result = event.results[i];
+                    // 【完全修正】元の正しい記述である result[0].transcript にしっかりと戻しました
+                    if (result && result[0]) {
+                        if (result.isFinal) {
+                            finalTranscript += result[0].transcript;
+                        } else {
+                            interimTranscript += result[0].transcript;
+                        }
+                    }
+                }
+
+                if (interimTranscript) interimDisplay.textContent = interimTranscript;
+                if (finalTranscript) {
+                    interimDisplay.textContent = '';
+                    const speechId = Date.now();
+
+                    letterQueue.push(...finalTranscript.split('').map(c => ({ text: c, id: speechId })));
+                    if (!isProcessing) processQueue();
+                }
+            };
+        }
+
+        function startVoice() {
+            const guide = document.getElementById('ambient-guide');
+            if (guide) {
+                guide.style.opacity = '0';
+                setTimeout(() => guide.remove(), 800);
+            }
+
+            if (!audioCtx) {
+                initRainAudio();
+            } else if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+
+            if (isRecognizing) return;
+            if (!recognition) return;
+
+            recognition.lang = 'ja-JP';
+            recognition.start();
+            isRecognizing = true;
+
+            document.body.style.cursor = 'default';
+        }
+
+        function processQueue() {
+            if (letterQueue.length === 0) { isProcessing = false; return; }
+            isProcessing = true;
+            const item = letterQueue.shift();
+            if (item && item.text.trim()) {
+                createWordBlock(item.text, item.id);
+            }
+            setTimeout(processQueue, 120);
+        }
+
+        function createWordBlock(text, speechId) {
+            const el = document.createElement('div');
+            el.className = 'word-block';
+            el.textContent = text;
+
+            const size = Math.floor(Math.random() * 216) + 35;
+            el.style.fontSize = size + 'px';
+
+            stage.appendChild(el);
+
+            const approxWidth = size;
+            const approxHeight = size;
+
+            const blockData = {
+                element: el,
+                speechId: speechId,
+                isGhost: false,
+                createdAt: Date.now(),
+                x: Math.random() * (stage.offsetWidth - approxWidth) + approxWidth / 2,
+                y: approxHeight / 2,
+                vx: 0,
+                vy: 0,
+                angle: (Math.random() - 0.5) * 15,
+                va: 0,
+                width: approxWidth,
+                height: approxHeight
+            };
+
+            blocks.push(blockData);
+            triggerRainSpike();
+        }
+
+        function gameLoop() {
+            const now = Date.now();
+
+            if (Math.random() < 0.45 && bgLetters.length < 80) {
+                const el = document.createElement('div');
+                el.className = 'bg-letter';
+                const jpLettersPool = "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをんアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン雨音光風水星月夜空美和創流流落言言葉声。".split('');
+
+                if (Math.random() < 0.80) el.textContent = jpLettersPool[Math.floor(Math.random() * jpLettersPool.length)];
+                else el.textContent = bgLettersPool[Math.floor(Math.random() * bgLettersPool.length)];
+
+                let size = Math.floor(Math.random() * 51) + 40;
+                if (Math.random() < 0.20) size = Math.floor(Math.random() * 171) + 150;
+                el.style.fontSize = size + 'px';
+
+                let randomX = Math.random() * (stage.offsetWidth - size);
+                let isOverlapping = true, attempts = 0;
+                while (isOverlapping && attempts < 10) {
+                    randomX = Math.random() * (stage.offsetWidth - size); isOverlapping = false;
+                    for (let bg of bgLetters) {
+                        const currentLeft = parseFloat(bg.element.style.left);
+                        const otherSize = parseFloat(bg.element.style.fontSize);
+                        if (Math.abs(randomX - currentLeft) < (size + otherSize) * 0.4) { isOverlapping = true; break; }
+                    }
+                    attempts++;
+                }
+                el.style.left = randomX + 'px';
+                stage.appendChild(el);
+                bgLetters.push({ element: el, y: -size, speed: Math.random() * 3 + 5 });
+            }
+            bgLetters = bgLetters.filter(bg => {
+                bg.y += bg.speed; bg.element.style.top = bg.y + 'px';
+                if (bg.y > stage.offsetHeight) { bg.element.remove(); return false; }
+                return true;
+            });
+            blocks = blocks.filter(b => {
+                if (now - b.createdAt > 5000) {
+                    b.isGhost = true;
+                }
+                if (b.isGhost) {
+                    b.vy = 10; b.vx = 0; b.va = 0;
+                } else {
+                    b.vy += 0.5; b.vx *= 0.75; b.va *= 0.8;
+                }
+                b.x += b.vx; b.y += b.vy; b.angle += b.va;
+                if (!b.isGhost) {
+                    if (b.x - b.width / 2 < 0) { b.x = b.width / 2; b.vx = 0; }
+                    if (b.x + b.width / 2 > stage.offsetWidth) { b.x = stage.offsetWidth - b.width / 2; b.vx = 0; }
+                    const groundY = stage.offsetHeight - b.height / 2;
+                    if (b.y >= groundY) { b.y = groundY; b.vy = 0; b.vx = 0; b.va = 0; }
+                    blocks.forEach(other => {
+                        if (b === other || other.isGhost) return;
+                        let dx = b.x - other.x, dy = b.y - other.y;
+                        let wx = (b.width + other.width) / 2, wy = (b.height + other.height) / 2;
+                        if (Math.abs(dx) < wx && Math.abs(dy) < wy && dy < 0) {
+                            b.y = other.y - wy; b.vy = 0; b.angle = b.angle * 0.8 + other.angle * 0.2;
+                        }
+                    });
+                }
+                b.element.style.left = (b.x - b.width / 2) + 'px';
+                b.element.style.top = (b.y - b.height / 2) + 'px';
+                b.element.style.transform = 'rotate(' + b.angle + 'deg)';
+                if (b.y - b.height / 2 > stage.offsetHeight) { b.element.remove(); return false; }
+                return true;
+            });
+            updateRainAudioFrame();
+            requestAnimationFrame(gameLoop);
+        }
+        requestAnimationFrame(gameLoop);
+    </script>
+</body>
+
+</html>

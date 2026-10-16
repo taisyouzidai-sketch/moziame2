@@ -256,9 +256,6 @@
 
             const size = Math.floor(Math.random() * 216) + 35;
             el.style.fontSize = size + 'px';
-            
-            if (window.innerWidth < 768 && size > 65) { el.style.fontSize = '65px'; el.style.width = '65px'; el.style.height = '65px'; }
-
             stage.appendChild(el);
             
             const approxWidth = size;

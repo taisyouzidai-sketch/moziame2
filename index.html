@@ -258,6 +258,8 @@
             el.style.fontSize = size + 'px';
 
             stage.appendChild(el);
+            // ［この1行だけをすぐ下に書き足す］
+            if (window.innerWidth < 768 && size > 65) { size = 65; el.style.fontSize = '65px'; }
 
             const approxWidth = size;
             const approxHeight = size;

@@ -290,6 +290,7 @@
             const now = Date.now();
 
             if (Math.random() < 0.45 && bgLetters.length < 80) {
+                if (window.innerWidth < 768 && Math.random() > 0.5) return;
                 const el = document.createElement('div');
                 el.className = 'bg-letter';
                 const jpLettersPool = "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをんアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン雨音光風水星月夜空美和創流流落言言葉声。".split('');

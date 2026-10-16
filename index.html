@@ -286,7 +286,7 @@
         function gameLoop() {
             const now = Date.now();
 
-            if (Math.random() < 0.45 && bgLetters.length < 80) {
+            if (Math.random() < (window.innerWidth < 768 ? 0.22 : 0.45) && bgLetters.length < 80) {
                 
                 const el = document.createElement('div');
                 el.className = 'bg-letter';
